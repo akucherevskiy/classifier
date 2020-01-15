@@ -1,0 +1,81 @@
+from keras.applications import ResNet50
+from keras.preprocessing.image import img_to_array
+from keras.applications import imagenet_utils
+from PIL import Image
+import numpy as np
+import flask
+import io
+
+app = flask.Flask(__name__)
+model = None
+
+
+def load_model():
+    global model
+    model = ResNet50(weights="imagenet")
+
+
+def prepare_image(image, target):
+    if image.mode != "RGB":
+        image = image.convert("RGB")
+
+    image = image.resize(target)
+    image = img_to_array(image)
+    image = np.expand_dims(image, axis=0)
+    image = imagenet_utils.preprocess_input(image)
+
+    return image
+
+
+def get_white_pixels_percentage(image):
+    im_arr = np.fromstring(image.tobytes(), dtype=np.uint8)
+    colors, counts = np.unique(im_arr.reshape(-1, 3), axis=0, return_counts=True)
+    white_pixels_count = all_count = 0
+    for color, count in zip(colors, counts):
+        if (color > 250).all():
+            white_pixels_count += count
+        all_count += count
+    # print(all_count, white_pixels_count, white_pixels_count / all_count * 100)
+
+    return white_pixels_count / all_count * 100
+
+
+@app.route("/predict", methods=["POST"])
+def predict():
+    data = {"success": False}
+    if flask.request.method == "POST":
+        if flask.request.files.get("image"):
+            image = flask.request.files["image"].read()
+            image = Image.open(io.BytesIO(image))
+
+            # get white pixels percentage
+            # data['white_pixels_percentage'] = \
+            white_pixels_percentage = get_white_pixels_percentage(image)
+
+            plan_words = ['menu', 'crossword_puzzle', 'web_site', 'envelope', 'comic_book']
+            # stop_words = ['monitor', 'screen', 'notebook']
+
+            # get predict list
+            image = prepare_image(image, target=(224, 224))
+            preds = model.predict(image)
+            results = imagenet_utils.decode_predictions(preds)
+            is_plan = 0
+            if white_pixels_percentage > 15:
+                is_plan += 1
+            for (imagenetID, label, prob) in results[0]:
+                if label in plan_words and prob > 0.1:
+                    is_plan += 1
+                # r = {"label": label, "probability": float(prob)}
+                # data["predictions"].append(r)
+            data['data'] = []
+            data['data'].append({'is_plan': is_plan > 0})
+            data['success'] = True
+
+            return flask.jsonify(data)
+
+
+if __name__ == "__main__":
+    print(("* Loading Keras model and Flask starting server..."
+           "please wait until server has fully started"))
+    load_model()
+    app.run(threaded=False)
